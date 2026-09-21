@@ -109,6 +109,11 @@ func (s *resultSignoffService) Transition(ctx context.Context, id uint, input dt
 		if actor != current.PreparedBy {
 			return model.ResultSignoff{}, ErrPreparationOwner
 		}
+		// 危急检验结果处置闸门：同一业务关联编号的严重风险结果在处置事项确认前
+		// 只能保留草稿，不能进入复核；运行失效后原确认作废会重新阻断。
+		if current.Gate != nil && current.Gate.Status != model.DispositionStateConfirmed {
+			return model.ResultSignoff{}, ErrGateBlocked
+		}
 		current.ReviewedBy = ""
 		current.ReviewReason = ""
 	}

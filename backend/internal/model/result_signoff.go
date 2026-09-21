@@ -20,6 +20,10 @@ type ResultSignoff struct {
 	ReviewedBy   string                  `json:"reviewedBy" gorm:"size:80;index"`
 	ReviewReason string                  `json:"reviewReason" gorm:"size:500"`
 	Revisions    []ResultSignoffRevision `json:"revisions,omitempty" gorm:"foreignKey:ResultSignoffID"`
+
+	// Gate 是危急检验结果处置闸门的只读快照，不持久化。为空表示该业务关联编号
+	// 当前没有处置事项，沿用普通结果流程。
+	Gate *CriticalGate `json:"gate,omitempty" gorm:"-"`
 }
 
 func (item *ResultSignoff) GetBase() *BaseModel { return &item.BaseModel }

@@ -31,9 +31,16 @@ docker compose down -v --remove-orphans
 | 检验样本 | `Specimen` | `/api/specimens` | received, testing, hold, released, disposed |
 | 检测运行 | `AssayRun` | `/api/assays` | planned, running, validated, invalid |
 | 结果签发 | `ResultSignoff` | `/api/signoff` | draft, peer_review, signed, rejected |
+| 危急检验结果处置闸门 | `CriticalDisposition` | `/api/dispositions` | pending, confirmed, void |
 
 - 独立登录页和 viewer/operator/reviewer/admin 四级 RBAC；写操作至少需要 operator，审计接口至少需要 reviewer。
 - 结果签发只能按 `draft -> peer_review -> signed/rejected` 推进；签发与驳回必须由不同于制单人的 reviewer/admin 完成。
+- **危急检验结果处置闸门**：检测运行核验通过（`validated`）后，风险级别为“严重”（`critical`）的运行必须自动生成待处置事项（`pending`）。
+- 使用同一业务关联编号（`relatedCode`）的严重风险结果，在处置事项确认前只能保留草稿，提交复核会被拒绝（422）。
+- 处置确认人须为 reviewer/admin，且不能是检测运行操作员（`operatedBy`）；确认时必须填写接收对象与处置措施。
+- 同一事项的重复或并发确认只会成功一次（条件更新 + 乐观锁，失败者返回 409）。
+- 检测运行随后变为 `invalid` 时，原处置确认（或待处置）作废为 `void`，并再次阻断同一关联编号的结果；运行重新核验通过会补登新的待处置事项。
+- 检测运行页与结果签发页均显示处置状态、检测运行操作员、接收对象、处置措施、确认人与关联运行，刷新后从接口回读；普通结果与既有异人复核规则不受影响。
 - 每次签发创建、草稿编辑和状态决策都会追加不可覆盖的版本，保留证据、操作者、原因和 request ID。
 - 所有状态变化使用乐观锁并写入不可覆盖的审计日志；已进入复核的签发业务字段不可再编辑。
 - 请求 ID、结构化日志、全局错误映射和 Redis 分布式限流。
@@ -119,6 +126,7 @@ KEEP_RUNNING=1 ./scripts/validate.sh
 |---|---|---|
 | `SpecimenState` | `received, testing, hold, released, disposed` | `backend/internal/constants/status.go`、`frontend/src/types/status.ts` |
 | `SignoffState` | `draft, peer_review, signed, rejected` | `backend/internal/constants/status.go`、`frontend/src/types/status.ts` |
+| `DispositionState` | `pending, confirmed, void` | `backend/internal/constants/status.go`、`frontend/src/types/status.ts` |
 
 每个实体自己的完整迁移图同样位于 `backend/internal/constants/status.go`；页面使用的状态列表位于 `frontend/src/types/status.ts`。修改状态时必须同步两处并更新对应服务测试。
 
@@ -128,6 +136,14 @@ KEEP_RUNNING=1 ./scripts/validate.sh
 2. 只有原制单人可以编辑或提交草稿；每次编辑和提交均追加版本。
 3. operator 不能作出最终签发决定；reviewer/admin 可以签发或驳回，但操作者必须不同于 `preparedBy`。
 4. `signed` 和 `rejected` 为终态，全部修订可从签发查询接口读取，审计历史可由 reviewer/admin 查询。
+
+## 危急检验结果处置闸门
+
+1. operator 将严重（`critical`）检测运行推进到 `validated`，系统在同一事务内创建 `CriticalDisposition(pending)`，并快照检测运行操作员 `operatedBy`。
+2. 同一 `relatedCode` 的严重结果提交 `peer_review` 前，系统读取最新闸门：仅 `confirmed` 放行；`pending` 或运行失效后的 `void` 一律阻断。
+3. reviewer/admin（且不等于 `operatedBy`）调用 `POST /api/dispositions/:id/confirm`，提交 `recipient` 与 `measure`；重复/并发确认最多成功一次。
+4. 运行被置为 `invalid` 时，其未失效事项在运行迁移事务内作废为 `void`；重新 `validated` 会补登新的 `pending` 事项，旧事项作为历史保留。
+5. `/api/assays` 返回每个运行的 `dispositions`；`/api/signoff` 返回每条结果的只读 `gate` 快照；处置事项可通过 `/api/dispositions` 单独查询。
 
 ## 环境变量
 

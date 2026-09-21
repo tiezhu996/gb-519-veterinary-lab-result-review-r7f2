@@ -10,6 +10,7 @@ import (
 	"github.com/blueship581/veterinary-lab-result-review/backend/internal/dto"
 	"github.com/blueship581/veterinary-lab-result-review/backend/internal/model"
 	"github.com/blueship581/veterinary-lab-result-review/backend/internal/repository"
+	"gorm.io/gorm"
 )
 
 type AssayRunService interface {
@@ -23,12 +24,13 @@ type AssayRunService interface {
 }
 
 type assayRunService struct {
-	repository repository.AssayRunRepository
-	security   SecurityService
+	repository  repository.AssayRunRepository
+	disposition repository.CriticalDispositionRepository
+	security    SecurityService
 }
 
-func NewAssayRunService(repo repository.AssayRunRepository, security SecurityService) AssayRunService {
-	return &assayRunService{repository: repo, security: security}
+func NewAssayRunService(repo repository.AssayRunRepository, disposition repository.CriticalDispositionRepository, security SecurityService) AssayRunService {
+	return &assayRunService{repository: repo, disposition: disposition, security: security}
 }
 
 func (s *assayRunService) List(ctx context.Context, query dto.PageQuery) (repository.Page[model.AssayRun], error) {
@@ -52,7 +54,7 @@ func (s *assayRunService) Create(ctx context.Context, input dto.CreateAssayRun, 
 		Category: strings.TrimSpace(input.Category), RiskLevel: input.RiskLevel,
 		MetricValue: input.MetricValue, MetricUnit: strings.TrimSpace(input.MetricUnit),
 		EffectiveAt: input.EffectiveAt.UTC(), Evidence: strings.TrimSpace(input.Evidence),
-		RelatedCode: strings.ToUpper(strings.TrimSpace(input.RelatedCode)),
+		RelatedCode: strings.ToUpper(strings.TrimSpace(input.RelatedCode)), OperatedBy: actor,
 	}
 	if err := s.repository.Create(ctx, &item); err != nil {
 		return model.AssayRun{}, fmt.Errorf("create 检测运行: %w", err)
@@ -82,6 +84,21 @@ func (s *assayRunService) Update(ctx context.Context, id uint, input dto.UpdateA
 	current.RelatedCode = strings.ToUpper(strings.TrimSpace(input.RelatedCode))
 	current.Version = input.ExpectedVersion + 1
 	current.UpdatedAt = time.Now().UTC()
+
+	// 已核验运行若经编辑成为严重风险，仍须补登危急处置事项，避免绕过闸门。
+	var sideEffect func(tx *gorm.DB) error
+	if current.Status == "validated" && current.RiskLevel == model.CriticalRiskLevel {
+		sideEffect = func(tx *gorm.DB) error {
+			_, ensureErr := s.disposition.EnsurePendingForRun(tx, &current, actor, requestID)
+			return ensureErr
+		}
+	}
+	if sideEffect != nil {
+		if err := s.repository.UpdateTx(ctx, id, input.ExpectedVersion, &current, actor, requestID, sideEffect); err != nil {
+			return model.AssayRun{}, fmt.Errorf("update 检测运行: %w", err)
+		}
+		return s.repository.Get(ctx, id)
+	}
 	if err := s.repository.Update(ctx, id, input.ExpectedVersion, &current); err != nil {
 		return model.AssayRun{}, fmt.Errorf("update 检测运行: %w", err)
 	}
@@ -101,12 +118,29 @@ func (s *assayRunService) Transition(ctx context.Context, id uint, input dto.Tra
 	before := current.Status
 	current.Status = target
 	current.Version = input.ExpectedVersion + 1
+	current.OperatedBy = actor
 	current.UpdatedAt = time.Now().UTC()
-	if err := s.repository.Update(ctx, id, input.ExpectedVersion, &current); err != nil {
-		return model.AssayRun{}, fmt.Errorf("transition 检测运行: %w", err)
+
+	// 危急检验结果处置闸门联动：核验通过后严重风险运行必须生成待处置事项；
+	// 运行随后变为无效时，未失效事项全部作废并再次阻断关联结果。
+	var sideEffect func(tx *gorm.DB) error
+	if target == "validated" && current.RiskLevel == model.CriticalRiskLevel {
+		sideEffect = func(tx *gorm.DB) error {
+			_, ensureErr := s.disposition.EnsurePendingForRun(tx, &current, actor, requestID)
+			return ensureErr
+		}
 	}
-	if err := s.security.Audit(ctx, actor, requestID, "transition", "AssayRun", id, before, target, input.Reason); err != nil {
-		return model.AssayRun{}, fmt.Errorf("persist transition audit: %w", err)
+	if target == "invalid" {
+		sideEffect = func(tx *gorm.DB) error {
+			_, voidErr := s.disposition.VoidActiveForRun(tx, &current, actor, requestID,
+				"assay run marked invalid; critical disposition voided and results blocked again")
+			return voidErr
+		}
+	}
+
+	if err := s.repository.TransitionTx(ctx, id, input.ExpectedVersion, &current, actor, requestID, before, target,
+		strings.TrimSpace(input.Reason), sideEffect); err != nil {
+		return model.AssayRun{}, fmt.Errorf("transition 检测运行: %w", err)
 	}
 	return s.repository.Get(ctx, id)
 }

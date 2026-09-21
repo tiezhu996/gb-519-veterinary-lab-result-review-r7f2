@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/blueship581/veterinary-lab-result-review/backend/internal/config"
@@ -82,6 +83,7 @@ func migrate(db *gorm.DB) error {
 		&model.AssayRun{},
 		&model.ResultSignoff{},
 		&model.ResultSignoffRevision{},
+		&model.CriticalDisposition{},
 	)
 }
 
@@ -119,6 +121,10 @@ func Seed(ctx context.Context, db *gorm.DB) error {
 	}
 
 	if err := seedResultSignoff(ctx, db); err != nil {
+		return err
+	}
+
+	if err := seedCriticalDisposition(ctx, db); err != nil {
 		return err
 	}
 
@@ -188,17 +194,27 @@ func seedAssayRun(ctx context.Context, db *gorm.DB) error {
 		{BaseModel: model.BaseModel{Code: "AR-001", Name: "检测运行示例一", Status: "planned", Version: 1,
 			Description: "用于启动验证和主要流程演示的检测运行记录"}, Facility: "兽医检验样本结果复核区域1", Owner: "运行一组",
 			Category: "常规", RiskLevel: "low", MetricValue: 12.5, MetricUnit: "unit",
-			EffectiveAt: now.Add(0 * time.Hour), Evidence: "已完成基础证据核对", RelatedCode: "REL-519-01"},
+			EffectiveAt: now.Add(0 * time.Hour), Evidence: "已完成基础证据核对", RelatedCode: "REL-519-01", OperatedBy: "operator"},
 
 		{BaseModel: model.BaseModel{Code: "AR-002", Name: "检测运行示例二", Status: "running", Version: 1,
 			Description: "用于启动验证和主要流程演示的检测运行记录"}, Facility: "兽医检验样本结果复核区域2", Owner: "质量复核组",
 			Category: "重点", RiskLevel: "medium", MetricValue: 25.0, MetricUnit: "%",
-			EffectiveAt: now.Add(3 * time.Hour), Evidence: "已完成基础证据核对", RelatedCode: "REL-519-02"},
+			EffectiveAt: now.Add(3 * time.Hour), Evidence: "已完成基础证据核对", RelatedCode: "REL-519-02", OperatedBy: "operator"},
 
-		{BaseModel: model.BaseModel{Code: "AR-003", Name: "检测运行示例三", Status: "validated", Version: 1,
-			Description: "用于启动验证和主要流程演示的检测运行记录"}, Facility: "兽医检验样本结果复核区域3", Owner: "安全主管组",
-			Category: "复核", RiskLevel: "high", MetricValue: 37.5, MetricUnit: "score",
-			EffectiveAt: now.Add(6 * time.Hour), Evidence: "已完成基础证据核对", RelatedCode: "REL-519-03"},
+		{BaseModel: model.BaseModel{Code: "AR-003", Name: "检测运行示例三（严重·已处置）", Status: "validated", Version: 1,
+			Description: "严重风险检测运行，处置事项已由复核员确认"}, Facility: "兽医检验样本结果复核区域3", Owner: "安全主管组",
+			Category: "复核", RiskLevel: "critical", MetricValue: 37.5, MetricUnit: "score",
+			EffectiveAt: now.Add(6 * time.Hour), Evidence: "危急值阳性，已完成运行核验", RelatedCode: "REL-519-03", OperatedBy: "operator"},
+
+		{BaseModel: model.BaseModel{Code: "AR-004", Name: "检测运行示例四（严重·待处置）", Status: "validated", Version: 1,
+			Description: "严重风险检测运行，待处置事项确认前关联结果只能保留草稿"}, Facility: "兽医检验样本结果复核区域4", Owner: "应急处置组",
+			Category: "复核", RiskLevel: "critical", MetricValue: 62.0, MetricUnit: "score",
+			EffectiveAt: now.Add(9 * time.Hour), Evidence: "危急值阳性，已完成运行核验", RelatedCode: "REL-519-04", OperatedBy: "operator"},
+
+		{BaseModel: model.BaseModel{Code: "AR-005", Name: "检测运行示例五（严重·运行失效）", Status: "invalid", Version: 2,
+			Description: "严重风险检测运行核验后被判无效，原处置确认失效并再次阻断关联结果"}, Facility: "兽医检验样本结果复核区域5", Owner: "应急处置组",
+			Category: "复核", RiskLevel: "critical", MetricValue: 58.5, MetricUnit: "score",
+			EffectiveAt: now.Add(12 * time.Hour), Evidence: "复检发现对照异常，运行判无效", RelatedCode: "REL-519-05", OperatedBy: "operator"},
 	}
 	return db.WithContext(ctx).Create(&items).Error
 }
@@ -222,9 +238,19 @@ func seedResultSignoff(ctx context.Context, db *gorm.DB) error {
 			EffectiveAt: now.Add(3 * time.Hour), Evidence: "已完成基础证据核对", RelatedCode: "REL-519-02", PreparedBy: "operator"},
 
 		{BaseModel: model.BaseModel{Code: "RS-003", Name: "结果签发示例三", Status: "signed", Version: 1,
-			Description: "用于启动验证和主要流程演示的结果签发记录"}, Facility: "兽医检验样本结果复核区域3", Owner: "安全主管组",
-			Category: "复核", RiskLevel: "high", MetricValue: 37.5, MetricUnit: "score",
+			Description: "严重风险结果，处置事项已确认后完成异人签发"}, Facility: "兽医检验样本结果复核区域3", Owner: "安全主管组",
+			Category: "复核", RiskLevel: "critical", MetricValue: 37.5, MetricUnit: "score",
 			EffectiveAt: now.Add(6 * time.Hour), Evidence: "已完成基础证据核对", RelatedCode: "REL-519-03", PreparedBy: "operator", ReviewedBy: "reviewer", ReviewReason: "演示数据双人复核通过"},
+
+		{BaseModel: model.BaseModel{Code: "RS-004", Name: "结果签发示例四（严重·草稿）", Status: "draft", Version: 1,
+			Description: "待处置事项确认前只能保留草稿，不能进入复核"}, Facility: "兽医检验样本结果复核区域4", Owner: "应急处置组",
+			Category: "复核", RiskLevel: "critical", MetricValue: 62.0, MetricUnit: "score",
+			EffectiveAt: now.Add(9 * time.Hour), Evidence: "危急值结果待处置", RelatedCode: "REL-519-04", PreparedBy: "operator"},
+
+		{BaseModel: model.BaseModel{Code: "RS-005", Name: "结果签发示例五（严重·阻断）", Status: "draft", Version: 1,
+			Description: "检测运行失效后原处置确认作废，关联结果再次被阻断"}, Facility: "兽医检验样本结果复核区域5", Owner: "应急处置组",
+			Category: "复核", RiskLevel: "critical", MetricValue: 58.5, MetricUnit: "score",
+			EffectiveAt: now.Add(12 * time.Hour), Evidence: "运行失效，处置链路待重建", RelatedCode: "REL-519-05", PreparedBy: "operator"},
 	}
 	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&items).Error; err != nil {
@@ -239,5 +265,76 @@ func seedResultSignoff(ctx context.Context, db *gorm.DB) error {
 			})
 		}
 		return tx.Create(&revisions).Error
+	})
+}
+
+func seedCriticalDisposition(ctx context.Context, db *gorm.DB) error {
+	var count int64
+	if err := db.WithContext(ctx).Model(&model.CriticalDisposition{}).Count(&count).Error; err != nil || count > 0 {
+		return err
+	}
+
+	type runRef struct {
+		code        string
+		status      string
+		relatedCode string
+	}
+	refs := []runRef{
+		{code: "AR-003", status: model.DispositionStateConfirmed, relatedCode: "REL-519-03"},
+		{code: "AR-004", status: model.DispositionStatePending, relatedCode: "REL-519-04"},
+		{code: "AR-005", status: model.DispositionStateVoid, relatedCode: "REL-519-05"},
+	}
+	now := time.Now().UTC()
+	items := make([]model.CriticalDisposition, 0, len(refs))
+	for index, ref := range refs {
+		var run model.AssayRun
+		if err := db.WithContext(ctx).Where("code = ?", ref.code).First(&run).Error; err != nil {
+			return err
+		}
+		item := model.CriticalDisposition{
+			BaseModel: model.BaseModel{
+				Code: "CD-" + strings.TrimPrefix(run.Code, "AR-") + "-V1",
+				Name: "危急结果处置-" + run.Code, Status: ref.status, Version: 1,
+			},
+			AssayRunID: run.ID, AssayRunCode: run.Code, RelatedCode: ref.relatedCode,
+			RiskLevel: model.CriticalRiskLevel, RunOperator: "operator",
+		}
+		switch ref.status {
+		case model.DispositionStateConfirmed:
+			confirmedAt := now.Add(time.Duration(index) * time.Hour)
+			item.Recipient = "驻场首席兽医张医生"
+			item.Measure = "立即隔离复检并启动疫情上报预案，2 小时内复核结果"
+			item.ConfirmedBy = "reviewer"
+			item.ConfirmedAt = &confirmedAt
+			item.ConfirmRequestID = "seed-gb-519"
+		case model.DispositionStateVoid:
+			item.VoidReason = "检测运行判无效，原危急处置确认失效"
+		}
+		items = append(items, item)
+	}
+	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&items).Error; err != nil {
+			return err
+		}
+		logs := make([]model.AuditLog, 0, len(items))
+		for _, item := range items {
+			action := "create"
+			detail := "seed critical disposition"
+			switch item.Status {
+			case model.DispositionStateConfirmed:
+				action = "confirm"
+				detail = "seed confirmed critical disposition"
+			case model.DispositionStateVoid:
+				action = "void"
+				detail = "seed voided critical disposition"
+			}
+			logs = append(logs, model.AuditLog{
+				RequestID: "seed-gb-519", Actor: "system-seed", Action: action,
+				EntityType: "CriticalDisposition", EntityID: item.ID,
+				BeforeState: model.DispositionStatePending, AfterState: item.Status,
+				Detail: detail, CreatedAt: now,
+			})
+		}
+		return tx.Create(&logs).Error
 	})
 }

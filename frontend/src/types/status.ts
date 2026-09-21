@@ -4,6 +4,9 @@ export type SpecimenState = 'received' | 'testing' | 'hold' | 'released' | 'disp
 export const ALL_SPECIMEN_STATE: readonly SpecimenState[] = ['received', 'testing', 'hold', 'released', 'disposed'];
 export type SignoffState = 'draft' | 'peer_review' | 'signed' | 'rejected';
 export const ALL_SIGNOFF_STATE: readonly SignoffState[] = ['draft', 'peer_review', 'signed', 'rejected'];
+// 危急检验结果处置闸门状态，与 backend/internal/constants/status.go 保持同步。
+export type DispositionState = 'pending' | 'confirmed' | 'void';
+export const ALL_DISPOSITION_STATE: readonly DispositionState[] = ['pending', 'confirmed', 'void'];
 
 export const ENTITY_CONFIGS: readonly EntityConfig[] = [
   { key: 'animalCase', path: 'cases', label: '动物样本来源', statuses: ['registered', 'sampling', 'testing', 'closed'] as const, primaryTransitions: { registered: 'sampling', sampling: 'testing', testing: 'closed' } },

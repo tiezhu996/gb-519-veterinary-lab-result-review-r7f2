@@ -16,6 +16,12 @@ type AssayRun struct {
 	EffectiveAt time.Time `json:"effectiveAt"`
 	Evidence    string    `json:"evidence" gorm:"size:2000"`
 	RelatedCode string    `json:"relatedCode" gorm:"size:64;index"`
+	// OperatedBy 记录最近一次执行检测运行状态操作的操作员。运行核验通过时，
+	// 该值被快照到危急处置事项，确认人不得与之为同一人。
+	OperatedBy string `json:"operatedBy" gorm:"size:80;index"`
+
+	// Dispositions 仅用于接口回读，不参与写入。
+	Dispositions []CriticalDisposition `json:"dispositions,omitempty" gorm:"foreignKey:AssayRunID"`
 }
 
 func (item *AssayRun) GetBase() *BaseModel { return &item.BaseModel }

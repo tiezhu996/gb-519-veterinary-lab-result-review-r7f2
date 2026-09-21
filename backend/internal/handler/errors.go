@@ -17,11 +17,14 @@ func handleError(c *gin.Context, err error) {
 		util.Fail(c, http.StatusNotFound, "not_found", "record was not found")
 	case errors.Is(err, repository.ErrVersionConflict):
 		util.Fail(c, http.StatusConflict, "version_conflict", "record changed; refresh and retry")
+	case errors.Is(err, service.ErrDispositionClosed):
+		util.Fail(c, http.StatusConflict, "disposition_closed", "critical disposition was already confirmed or voided")
 	case errors.Is(err, service.ErrForbidden):
 		util.Fail(c, http.StatusForbidden, "forbidden", err.Error())
 	case errors.Is(err, service.ErrInvalidTransition), errors.Is(err, service.ErrInvalidInput),
 		errors.Is(err, service.ErrReviewRequired), errors.Is(err, service.ErrLocked),
-		errors.Is(err, service.ErrPreparationOwner), errors.Is(err, service.ErrSeparationOfDuty):
+		errors.Is(err, service.ErrPreparationOwner), errors.Is(err, service.ErrSeparationOfDuty),
+		errors.Is(err, service.ErrGateBlocked), errors.Is(err, service.ErrRunOperatorBlocked):
 		util.Fail(c, http.StatusUnprocessableEntity, "business_rule", err.Error())
 	default:
 		_ = c.Error(err)

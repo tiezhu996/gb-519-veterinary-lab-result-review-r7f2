@@ -19,12 +19,13 @@ type ResultSignoffRepository interface {
 }
 
 type resultSignoffRepository struct {
-	store *Store[model.ResultSignoff]
-	db    *gorm.DB
+	store       *Store[model.ResultSignoff]
+	disposition CriticalDispositionRepository
+	db          *gorm.DB
 }
 
-func NewResultSignoffRepository(db *gorm.DB) ResultSignoffRepository {
-	return &resultSignoffRepository{store: NewStore[model.ResultSignoff](db), db: db}
+func NewResultSignoffRepository(db *gorm.DB, disposition CriticalDispositionRepository) ResultSignoffRepository {
+	return &resultSignoffRepository{store: NewStore[model.ResultSignoff](db), disposition: disposition, db: db}
 }
 
 func (r *resultSignoffRepository) List(ctx context.Context, q dto.PageQuery) (Page[model.ResultSignoff], error) {
@@ -33,8 +34,10 @@ func (r *resultSignoffRepository) List(ctx context.Context, q dto.PageQuery) (Pa
 		return page, err
 	}
 	ids := make([]uint, 0, len(page.Items))
+	relatedCodes := make([]string, 0, len(page.Items))
 	for _, item := range page.Items {
 		ids = append(ids, item.ID)
+		relatedCodes = append(relatedCodes, item.RelatedCode)
 	}
 	var revisions []model.ResultSignoffRevision
 	if err := r.db.WithContext(ctx).Where("result_signoff_id IN ?", ids).
@@ -45,8 +48,16 @@ func (r *resultSignoffRepository) List(ctx context.Context, q dto.PageQuery) (Pa
 	for _, revision := range revisions {
 		bySignoff[revision.ResultSignoffID] = append(bySignoff[revision.ResultSignoffID], revision)
 	}
+	gates, err := r.disposition.GatesForRelatedCodes(ctx, relatedCodes)
+	if err != nil {
+		return Page[model.ResultSignoff]{}, err
+	}
 	for index := range page.Items {
 		page.Items[index].Revisions = bySignoff[page.Items[index].ID]
+		if gate, ok := gates[page.Items[index].RelatedCode]; ok {
+			gateCopy := gate
+			page.Items[index].Gate = &gateCopy
+		}
 	}
 	return page, nil
 }
@@ -55,7 +66,18 @@ func (r *resultSignoffRepository) Get(ctx context.Context, id uint) (model.Resul
 	err := r.db.WithContext(ctx).Preload("Revisions", func(db *gorm.DB) *gorm.DB {
 		return db.Order("version")
 	}).First(&item, id).Error
-	return item, err
+	if err != nil {
+		return item, err
+	}
+	gates, gateErr := r.disposition.GatesForRelatedCodes(ctx, []string{item.RelatedCode})
+	if gateErr != nil {
+		return item, gateErr
+	}
+	if gate, ok := gates[item.RelatedCode]; ok {
+		gateCopy := gate
+		item.Gate = &gateCopy
+	}
+	return item, nil
 }
 func (r *resultSignoffRepository) CreateVersion(ctx context.Context, item *model.ResultSignoff, actor, requestID string) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {

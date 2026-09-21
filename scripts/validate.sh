@@ -115,6 +115,67 @@ curl -fsS "http://127.0.0.1:${BACKEND_PORT:-19519}/api/audits/ResultSignoff/$sig
 curl -fsS "http://127.0.0.1:${BACKEND_PORT:-19519}/api/audit-summary?windowHours=24" -H "Authorization: Bearer $admin_token" \
   | jq -e '.data.total >= 6 and .data.transitions >= 3 and .data.uniqueActors >= 2' >/dev/null
 
+# 危急检验结果处置闸门：核验通过的 critical 运行必须生成待处置事项，确认前
+# 同业务编号结果只能保留草稿；确认须异人复核员，运行无效后原确认失效并再次阻断。
+gate_rel="REL-GATE-$suffix"
+gate_assay_payload=$(printf '{"code":"AR-GATE-%s","name":"Critical gate assay","description":"Gate Compose validation","facility":"Validation Veterinary Lab","owner":"Run Desk","category":"PCR","riskLevel":"critical","metricValue":91.2,"metricUnit":"score","effectiveAt":"%s","evidence":"controls within range","relatedCode":"%s"}' "$suffix" "$now" "$gate_rel")
+gate_assay=$(curl -fsS -X POST "http://127.0.0.1:${BACKEND_PORT:-19519}/api/assays" \
+  -H "Authorization: Bearer $operator_token" -H 'Content-Type: application/json' -H 'X-Request-ID: gb519-gate-assay-create' \
+  -d "$gate_assay_payload")
+gate_assay_id=$(printf '%s' "$gate_assay" | jq -er '.data.id')
+gate_assay_version=$(printf '%s' "$gate_assay" | jq -er '.data.version')
+gate_running=$(curl -fsS -X POST "http://127.0.0.1:${BACKEND_PORT:-19519}/api/assays/$gate_assay_id/transition" \
+  -H "Authorization: Bearer $operator_token" -H 'Content-Type: application/json' -H 'X-Request-ID: gb519-gate-running' \
+  -d "{\"status\":\"running\",\"expectedVersion\":$gate_assay_version,\"reason\":\"start critical assay\"}")
+gate_running_version=$(printf '%s' "$gate_running" | jq -er '.data.version')
+gate_validated=$(curl -fsS -X POST "http://127.0.0.1:${BACKEND_PORT:-19519}/api/assays/$gate_assay_id/transition" \
+  -H "Authorization: Bearer $operator_token" -H 'Content-Type: application/json' -H 'X-Request-ID: gb519-gate-validated' \
+  -d "{\"status\":\"validated\",\"expectedVersion\":$gate_running_version,\"reason\":\"critical assay validated\"}")
+gate_validated_version=$(printf '%s' "$gate_validated" | jq -er '.data.version')
+printf '%s' "$gate_validated" | jq -e '.data.operatedBy == "operator" and (.data.dispositions | length) == 1 and .data.dispositions[0].status == "pending" and .data.dispositions[0].runOperator == "operator" and .data.dispositions[0].assayStatus == "validated"' >/dev/null
+gate_disposition_id=$(printf '%s' "$gate_validated" | jq -er '.data.dispositions[0].id')
+
+gate_signoff_payload=$(printf '{"code":"RS-GATE-%s","name":"Critical gate result","description":"Gate result Compose validation","facility":"Validation Veterinary Lab","owner":"Result Desk","category":"PCR","riskLevel":"critical","metricValue":91.2,"metricUnit":"score","effectiveAt":"%s","evidence":"critical value evidence","relatedCode":"%s"}' "$suffix" "$now" "$gate_rel")
+gate_signoff=$(curl -fsS -X POST "http://127.0.0.1:${BACKEND_PORT:-19519}/api/signoff" \
+  -H "Authorization: Bearer $operator_token" -H 'Content-Type: application/json' -H 'X-Request-ID: gb519-gate-signoff-create' \
+  -d "$gate_signoff_payload")
+gate_signoff_id=$(printf '%s' "$gate_signoff" | jq -er '.data.id')
+gate_block_status=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:${BACKEND_PORT:-19519}/api/signoff/$gate_signoff_id/transition" \
+  -H "Authorization: Bearer $operator_token" -H 'Content-Type: application/json' \
+  -d '{"status":"peer_review","expectedVersion":1,"reason":"must be blocked pending disposition"}')
+[ "$gate_block_status" = "422" ]
+
+gate_confirm_403=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:${BACKEND_PORT:-19519}/api/dispositions/$gate_disposition_id/confirm" \
+  -H "Authorization: Bearer $operator_token" -H 'Content-Type: application/json' \
+  -d '{"expectedVersion":1,"receiveTarget":"authority desk","dispositionAction":"quarantine and retest immediately","reason":"operator must not confirm"}')
+[ "$gate_confirm_403" = "403" ]
+gate_confirmed=$(curl -fsS -X POST "http://127.0.0.1:${BACKEND_PORT:-19519}/api/dispositions/$gate_disposition_id/confirm" \
+  -H "Authorization: Bearer $reviewer_token" -H 'Content-Type: application/json' -H 'X-Request-ID: gb519-gate-confirm' \
+  -d '{"expectedVersion":1,"receiveTarget":"属地兽医主管部门","dispositionAction":"立即隔离阳性动物、启动复检并上报","reason":"critical disposition protocol"}')
+printf '%s' "$gate_confirmed" | jq -e '.data.status == "confirmed" and .data.confirmedBy == "reviewer" and .data.receiveTarget == "属地兽医主管部门"' >/dev/null
+gate_repeat_status=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:${BACKEND_PORT:-19519}/api/dispositions/$gate_disposition_id/confirm" \
+  -H "Authorization: Bearer $admin_token" -H 'Content-Type: application/json' \
+  -d '{"expectedVersion":2,"receiveTarget":"other desk","dispositionAction":"repeated confirm must fail again now","reason":"repeat confirm"}')
+[ "$gate_repeat_status" = "422" ]
+
+curl -fsS -X POST "http://127.0.0.1:${BACKEND_PORT:-19519}/api/signoff/$gate_signoff_id/transition" \
+  -H "Authorization: Bearer $operator_token" -H 'Content-Type: application/json' -H 'X-Request-ID: gb519-gate-submit' \
+  -d '{"status":"peer_review","expectedVersion":1,"reason":"gate cleared, submit for review"}' \
+  | jq -e '.data.status == "peer_review"' >/dev/null
+
+gate_invalid=$(curl -fsS -X POST "http://127.0.0.1:${BACKEND_PORT:-19519}/api/assays/$gate_assay_id/transition" \
+  -H "Authorization: Bearer $operator_token" -H 'Content-Type: application/json' -H 'X-Request-ID: gb519-gate-invalid' \
+  -d "{\"status\":\"invalid\",\"expectedVersion\":$gate_validated_version,\"reason\":\"controls failed, run invalid\"}")
+printf '%s' "$gate_invalid" | jq -e '.data.dispositions[0].status == "voided" and .data.dispositions[0].voidedBy == "operator" and .data.dispositions[0].assayStatus == "invalid"' >/dev/null
+gate_signoff2=$(curl -fsS -X POST "http://127.0.0.1:${BACKEND_PORT:-19519}/api/signoff" \
+  -H "Authorization: Bearer $operator_token" -H 'Content-Type: application/json' \
+  -d "$(printf '%s' "$gate_signoff_payload" | sed "s/RS-GATE-$suffix/RS2-GATE-$suffix/")")
+gate_signoff2_id=$(printf '%s' "$gate_signoff2" | jq -er '.data.id')
+gate_reblock_status=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:${BACKEND_PORT:-19519}/api/signoff/$gate_signoff2_id/transition" \
+  -H "Authorization: Bearer $operator_token" -H 'Content-Type: application/json' \
+  -d '{"status":"peer_review","expectedVersion":1,"reason":"gate must block again after invalidation"}')
+[ "$gate_reblock_status" = "422" ]
+
 docker compose ps
 if [ "${KEEP_RUNNING:-0}" = "1" ]; then
   echo "KEEP_RUNNING=1: containers left running for built-in Browser validation"

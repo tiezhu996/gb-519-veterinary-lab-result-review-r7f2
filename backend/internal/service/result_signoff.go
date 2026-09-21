@@ -23,12 +23,13 @@ type ResultSignoffService interface {
 }
 
 type resultSignoffService struct {
-	repository repository.ResultSignoffRepository
-	security   SecurityService
+	repository   repository.ResultSignoffRepository
+	dispositions repository.CriticalDispositionRepository
+	security     SecurityService
 }
 
-func NewResultSignoffService(repo repository.ResultSignoffRepository, security SecurityService) ResultSignoffService {
-	return &resultSignoffService{repository: repo, security: security}
+func NewResultSignoffService(repo repository.ResultSignoffRepository, dispositions repository.CriticalDispositionRepository, security SecurityService) ResultSignoffService {
+	return &resultSignoffService{repository: repo, dispositions: dispositions, security: security}
 }
 
 func (s *resultSignoffService) List(ctx context.Context, query dto.PageQuery) (repository.Page[model.ResultSignoff], error) {
@@ -108,6 +109,15 @@ func (s *resultSignoffService) Transition(ctx context.Context, id uint, input dt
 	if target == "peer_review" {
 		if actor != current.PreparedBy {
 			return model.ResultSignoff{}, ErrPreparationOwner
+		}
+		// 危急检验结果处置闸门：同一业务关联编号下，只要仍存在“已核验运行 +
+		// 待确认处置事项”，结果只能保留草稿，不能进入复核。
+		blocked, err := s.dispositions.HasBlockingGate(ctx, current.RelatedCode)
+		if err != nil {
+			return model.ResultSignoff{}, fmt.Errorf("check critical disposition gate: %w", err)
+		}
+		if blocked {
+			return model.ResultSignoff{}, ErrCriticalGate
 		}
 		current.ReviewedBy = ""
 		current.ReviewReason = ""

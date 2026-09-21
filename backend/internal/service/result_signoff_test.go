@@ -15,7 +15,7 @@ import (
 
 func TestResultSignoffPreservesVersionsAndRequiresIndependentReviewer(t *testing.T) {
 	db := newSignoffTestDB(t)
-	svc := NewResultSignoffService(repository.NewResultSignoffRepository(db), nil)
+	svc := NewResultSignoffService(repository.NewResultSignoffRepository(db), repository.NewCriticalDispositionRepository(db), nil)
 	ctx := context.Background()
 
 	created, err := svc.Create(ctx, signoffInput("SIGNOFF-TEST-01"), "operator", "signoff-create-1")
@@ -92,7 +92,8 @@ func newSignoffTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if err := db.AutoMigrate(&model.AuditLog{}, &model.ResultSignoff{}, &model.ResultSignoffRevision{}); err != nil {
+	if err := db.AutoMigrate(&model.AuditLog{}, &model.ResultSignoff{}, &model.ResultSignoffRevision{},
+		&model.AssayRun{}, &model.CriticalDisposition{}); err != nil {
 		t.Fatalf("migrate sqlite: %v", err)
 	}
 	return db

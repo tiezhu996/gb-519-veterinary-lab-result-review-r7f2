@@ -20,6 +20,8 @@ type ResultSignoff struct {
 	ReviewedBy   string                  `json:"reviewedBy" gorm:"size:80;index"`
 	ReviewReason string                  `json:"reviewReason" gorm:"size:500"`
 	Revisions    []ResultSignoffRevision `json:"revisions,omitempty" gorm:"foreignKey:ResultSignoffID"`
+	// Dispositions 按 relatedCode 关联的危急处置事项，由服务层填充，不持久化在本表。
+	Dispositions []CriticalDisposition `json:"dispositions,omitempty" gorm:"-"`
 }
 
 func (item *ResultSignoff) GetBase() *BaseModel { return &item.BaseModel }

@@ -12,6 +12,7 @@ import (
 )
 
 var ErrVersionConflict = errors.New("record was changed by another request")
+var ErrAlreadyConfirmed = errors.New("disposition was already confirmed by another request")
 
 type Page[T any] struct {
 	Items    []T   `json:"items"`

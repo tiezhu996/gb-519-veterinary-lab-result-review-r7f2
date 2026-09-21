@@ -31,9 +31,12 @@ docker compose down -v --remove-orphans
 | 检验样本 | `Specimen` | `/api/specimens` | received, testing, hold, released, disposed |
 | 检测运行 | `AssayRun` | `/api/assays` | planned, running, validated, invalid |
 | 结果签发 | `ResultSignoff` | `/api/signoff` | draft, peer_review, signed, rejected |
+| 危急处置事项 | `CriticalDisposition` | `/api/dispositions` | pending, confirmed, voided |
 
 - 独立登录页和 viewer/operator/reviewer/admin 四级 RBAC；写操作至少需要 operator，审计接口至少需要 reviewer。
 - 结果签发只能按 `draft -> peer_review -> signed/rejected` 推进；签发与驳回必须由不同于制单人的 reviewer/admin 完成。
+- **危急检验结果处置闸门**：检测运行核验通过（`validated`）且风险级别为 critical 时，同一事务生成待处置事项；同一业务关联编号（`relatedCode`）的结果在事项确认前只能保留草稿，不能进入复核。确认人必须是 reviewer/admin 且不能是检测运行操作员，并须填写接收对象和处置措施；条件 UPDATE + 乐观锁保证重复或并发确认只成功一次。检测运行随后变为 `invalid` 时原确认随事项作废并再次阻断关联结果，重新核验会生成新的待处置事项。普通（非 critical）结果与既有异人复核规则保持不变。
+- 检测运行与结果签发页面显示处置状态、运行操作员、确认人、接收对象、处置措施及关联检测运行，处置信息随列表/详情接口刷新回读。
 - 每次签发创建、草稿编辑和状态决策都会追加不可覆盖的版本，保留证据、操作者、原因和 request ID。
 - 所有状态变化使用乐观锁并写入不可覆盖的审计日志；已进入复核的签发业务字段不可再编辑。
 - 请求 ID、结构化日志、全局错误映射和 Redis 分布式限流。
@@ -119,6 +122,7 @@ KEEP_RUNNING=1 ./scripts/validate.sh
 |---|---|---|
 | `SpecimenState` | `received, testing, hold, released, disposed` | `backend/internal/constants/status.go`、`frontend/src/types/status.ts` |
 | `SignoffState` | `draft, peer_review, signed, rejected` | `backend/internal/constants/status.go`、`frontend/src/types/status.ts` |
+| `DispositionState` | `pending, confirmed, voided` | `backend/internal/constants/status.go`、`frontend/src/types/status.ts` |
 
 每个实体自己的完整迁移图同样位于 `backend/internal/constants/status.go`；页面使用的状态列表位于 `frontend/src/types/status.ts`。修改状态时必须同步两处并更新对应服务测试。
 
@@ -128,6 +132,15 @@ KEEP_RUNNING=1 ./scripts/validate.sh
 2. 只有原制单人可以编辑或提交草稿；每次编辑和提交均追加版本。
 3. operator 不能作出最终签发决定；reviewer/admin 可以签发或驳回，但操作者必须不同于 `preparedBy`。
 4. `signed` 和 `rejected` 为终态，全部修订可从签发查询接口读取，审计历史可由 reviewer/admin 查询。
+
+## 危急检验结果处置闸门
+
+1. operator 将检测运行推进到 `validated` 时，系统记录运行操作员（`operatedBy`）；风险级别为 critical 的运行在同一数据库事务中创建 `pending` 处置事项。
+2. 结果签发从 `draft` 提交到 `peer_review` 前，服务层按 `relatedCode` 检查闸门：存在“已核验运行 + 待确认事项”或“已无效运行 + 已失效事项”即返回 422，结果只能保留草稿。
+3. 处置事项确认接口 `POST /api/dispositions/:id/confirm` 仅 reviewer/admin 可调；确认人不能等于运行操作员，且必须填写接收对象（`receiveTarget`）、处置措施（`dispositionAction`）和确认原因。
+4. 确认使用行锁加条件 UPDATE（`status = pending AND version = ?`），同一事项的重复或并发确认恰好成功一次，其余请求返回 409/422。
+5. 检测运行推进到 `invalid` 时，同事务将其全部处置事项（含已确认项）置为 `voided` 并写审计；原确认失效，同业务编号结果再次被阻断。运行从 `invalid` 重新 `validated` 后生成新的 `pending` 事项，历史 voided 记录保留可追溯。
+6. 检测运行和结果签发页面通过嵌入的 `dispositions` 数据展示处置状态、运行操作员、确认人、接收对象、处置措施和关联运行，刷新后可直接回读。
 
 ## 环境变量
 

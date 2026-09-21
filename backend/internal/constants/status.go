@@ -26,6 +26,16 @@ const (
 
 var AllSignoffState = []string{"draft", "peer_review", "signed", "rejected"}
 
+type DispositionState string
+
+const (
+	DispositionStatePending   DispositionState = "pending"
+	DispositionStateConfirmed DispositionState = "confirmed"
+	DispositionStateVoided    DispositionState = "voided"
+)
+
+var AllDispositionState = []string{"pending", "confirmed", "voided"}
+
 var AnimalCaseTransitions = map[string]map[string]bool{
 	"registered": {"sampling": true, "testing": true},
 	"sampling":   {"testing": true, "closed": true, "registered": true},

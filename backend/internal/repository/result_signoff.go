@@ -19,12 +19,17 @@ type ResultSignoffRepository interface {
 }
 
 type resultSignoffRepository struct {
-	store *Store[model.ResultSignoff]
-	db    *gorm.DB
+	store        *Store[model.ResultSignoff]
+	db           *gorm.DB
+	dispositions CriticalDispositionRepository
 }
 
 func NewResultSignoffRepository(db *gorm.DB) ResultSignoffRepository {
-	return &resultSignoffRepository{store: NewStore[model.ResultSignoff](db), db: db}
+	return &resultSignoffRepository{
+		store:        NewStore[model.ResultSignoff](db),
+		db:           db,
+		dispositions: NewCriticalDispositionRepository(db),
+	}
 }
 
 func (r *resultSignoffRepository) List(ctx context.Context, q dto.PageQuery) (Page[model.ResultSignoff], error) {
@@ -48,14 +53,45 @@ func (r *resultSignoffRepository) List(ctx context.Context, q dto.PageQuery) (Pa
 	for index := range page.Items {
 		page.Items[index].Revisions = bySignoff[page.Items[index].ID]
 	}
+	if err := r.attachDispositions(ctx, page.Items); err != nil {
+		return Page[model.ResultSignoff]{}, err
+	}
 	return page, nil
+}
+
+// attachDispositions fills critical dispositions keyed by relatedCode so the
+// UI can render the gate without extra requests.
+func (r *resultSignoffRepository) attachDispositions(ctx context.Context, items []model.ResultSignoff) error {
+	if len(items) == 0 {
+		return nil
+	}
+	codes := make([]string, 0, len(items))
+	for _, item := range items {
+		codes = append(codes, item.RelatedCode)
+	}
+	byCode, err := r.dispositions.ListByRelatedCodes(ctx, codes)
+	if err != nil {
+		return err
+	}
+	for index := range items {
+		items[index].Dispositions = byCode[items[index].RelatedCode]
+	}
+	return nil
 }
 func (r *resultSignoffRepository) Get(ctx context.Context, id uint) (model.ResultSignoff, error) {
 	var item model.ResultSignoff
 	err := r.db.WithContext(ctx).Preload("Revisions", func(db *gorm.DB) *gorm.DB {
 		return db.Order("version")
 	}).First(&item, id).Error
-	return item, err
+	if err != nil {
+		return item, err
+	}
+	items := []model.ResultSignoff{item}
+	if err := r.attachDispositions(ctx, items); err != nil {
+		return item, err
+	}
+	item.Dispositions = items[0].Dispositions
+	return item, nil
 }
 func (r *resultSignoffRepository) CreateVersion(ctx context.Context, item *model.ResultSignoff, actor, requestID string) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -76,6 +112,7 @@ func (r *resultSignoffRepository) CreateVersion(ctx context.Context, item *model
 func (r *resultSignoffRepository) UpdateVersion(ctx context.Context, id, expectedVersion uint, item *model.ResultSignoff, actor, requestID, action, before, reason string) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		item.Revisions = nil
+		item.Dispositions = nil
 		if err := optimisticUpdate(tx, id, expectedVersion, item); err != nil {
 			return err
 		}

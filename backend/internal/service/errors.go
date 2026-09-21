@@ -12,4 +12,8 @@ var (
 	ErrLocked            = errors.New("record is locked after peer review begins")
 	ErrPreparationOwner  = errors.New("only the original preparer may edit or submit this draft")
 	ErrSeparationOfDuty  = errors.New("preparer and reviewer must be different users")
+	ErrCriticalGate      = errors.New("critical result disposition must be confirmed before peer review")
+	ErrDispositionState  = errors.New("critical disposition is not awaiting confirmation")
+	ErrRunOperator       = errors.New("disposition confirmer must differ from the assay run operator")
+	ErrAssayInvalid      = errors.New("the related assay run is invalid and the disposition no longer applies")
 )

@@ -101,12 +101,27 @@ func (s *assayRunService) Transition(ctx context.Context, id uint, input dto.Tra
 	before := current.Status
 	current.Status = target
 	current.Version = input.ExpectedVersion + 1
+	current.OperatedBy = actor
 	current.UpdatedAt = time.Now().UTC()
-	if err := s.repository.Update(ctx, id, input.ExpectedVersion, &current); err != nil {
-		return model.AssayRun{}, fmt.Errorf("transition 检测运行: %w", err)
-	}
-	if err := s.security.Audit(ctx, actor, requestID, "transition", "AssayRun", id, before, target, input.Reason); err != nil {
-		return model.AssayRun{}, fmt.Errorf("persist transition audit: %w", err)
+	reason := strings.TrimSpace(input.Reason)
+	// validated 打开危急闸门（critical 时同事务生成待处置事项）；invalid 关闭
+	// 闸门（同事务作废全部处置事项，含已确认项）。
+	switch target {
+	case "validated":
+		if err := s.repository.TransitionValidated(ctx, id, input.ExpectedVersion, &current, actor, requestID, reason); err != nil {
+			return model.AssayRun{}, fmt.Errorf("transition 检测运行: %w", err)
+		}
+	case "invalid":
+		if err := s.repository.TransitionInvalidate(ctx, id, input.ExpectedVersion, &current, actor, requestID, reason); err != nil {
+			return model.AssayRun{}, fmt.Errorf("transition 检测运行: %w", err)
+		}
+	default:
+		if err := s.repository.Update(ctx, id, input.ExpectedVersion, &current); err != nil {
+			return model.AssayRun{}, fmt.Errorf("transition 检测运行: %w", err)
+		}
+		if err := s.security.Audit(ctx, actor, requestID, "transition", "AssayRun", id, before, target, reason); err != nil {
+			return model.AssayRun{}, fmt.Errorf("persist transition audit: %w", err)
+		}
 	}
 	return s.repository.Get(ctx, id)
 }

@@ -82,6 +82,7 @@ func migrate(db *gorm.DB) error {
 		&model.AssayRun{},
 		&model.ResultSignoff{},
 		&model.ResultSignoffRevision{},
+		&model.CriticalDisposition{},
 	)
 }
 
@@ -119,6 +120,10 @@ func Seed(ctx context.Context, db *gorm.DB) error {
 	}
 
 	if err := seedResultSignoff(ctx, db); err != nil {
+		return err
+	}
+
+	if err := seedCriticalDisposition(ctx, db); err != nil {
 		return err
 	}
 
@@ -196,11 +201,16 @@ func seedAssayRun(ctx context.Context, db *gorm.DB) error {
 			EffectiveAt: now.Add(3 * time.Hour), Evidence: "已完成基础证据核对", RelatedCode: "REL-519-02"},
 
 		{BaseModel: model.BaseModel{Code: "AR-003", Name: "检测运行示例三", Status: "validated", Version: 1,
-			Description: "用于启动验证和主要流程演示的检测运行记录"}, Facility: "兽医检验样本结果复核区域3", Owner: "安全主管组",
-			Category: "复核", RiskLevel: "high", MetricValue: 37.5, MetricUnit: "score",
+			Description: "危急结果：核验通过后必须先完成处置事项"}, Facility: "兽医检验样本结果复核区域3", Owner: "安全主管组",
+			Category: "复核", RiskLevel: "critical", MetricValue: 37.5, MetricUnit: "score",
 			EffectiveAt: now.Add(6 * time.Hour), Evidence: "已完成基础证据核对", RelatedCode: "REL-519-03"},
 	}
-	return db.WithContext(ctx).Create(&items).Error
+	if err := db.WithContext(ctx).Create(&items).Error; err != nil {
+		return err
+	}
+	// AR-003 已由 operator 核验通过，回填运行操作员用于处置异人确认。
+	return db.WithContext(ctx).Model(&model.AssayRun{}).
+		Where("code = ?", "AR-003").Update("operated_by", "operator").Error
 }
 
 func seedResultSignoff(ctx context.Context, db *gorm.DB) error {
@@ -225,6 +235,11 @@ func seedResultSignoff(ctx context.Context, db *gorm.DB) error {
 			Description: "用于启动验证和主要流程演示的结果签发记录"}, Facility: "兽医检验样本结果复核区域3", Owner: "安全主管组",
 			Category: "复核", RiskLevel: "high", MetricValue: 37.5, MetricUnit: "score",
 			EffectiveAt: now.Add(6 * time.Hour), Evidence: "已完成基础证据核对", RelatedCode: "REL-519-03", PreparedBy: "operator", ReviewedBy: "reviewer", ReviewReason: "演示数据双人复核通过"},
+
+		{BaseModel: model.BaseModel{Code: "RS-004", Name: "危急结果签发示例", Status: "draft", Version: 1,
+			Description: "危急处置闸门演示：处置事项确认前只能保留草稿"}, Facility: "兽医检验样本结果复核区域3", Owner: "安全主管组",
+			Category: "复核", RiskLevel: "critical", MetricValue: 41.2, MetricUnit: "score",
+			EffectiveAt: now.Add(7 * time.Hour), Evidence: "危急指标待处置确认", RelatedCode: "REL-519-03", PreparedBy: "operator"},
 	}
 	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&items).Error; err != nil {
@@ -240,4 +255,24 @@ func seedResultSignoff(ctx context.Context, db *gorm.DB) error {
 		}
 		return tx.Create(&revisions).Error
 	})
+}
+
+// seedCriticalDisposition 为已核验的 critical 检测运行 AR-003 生成一条待处置事项，
+// 与真实核验流程同构（运行操作员为 operator，确认需由异人复核完成）。
+func seedCriticalDisposition(ctx context.Context, db *gorm.DB) error {
+	var count int64
+	if err := db.WithContext(ctx).Model(&model.CriticalDisposition{}).Count(&count).Error; err != nil || count > 0 {
+		return err
+	}
+	var assay model.AssayRun
+	if err := db.WithContext(ctx).Where("code = ?", "AR-003").First(&assay).Error; err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	disposition := model.CriticalDisposition{
+		Code: "CD-AR-003-SEED", Status: model.CriticalDispositionInitialStatus, Version: 1,
+		RelatedCode: assay.RelatedCode, AssayRunID: assay.ID, AssayCode: assay.Code,
+		RiskLevel: assay.RiskLevel, RunOperator: "operator", CreatedAt: now, UpdatedAt: now,
+	}
+	return db.WithContext(ctx).Create(&disposition).Error
 }

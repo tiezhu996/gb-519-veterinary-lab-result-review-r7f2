@@ -4,6 +4,8 @@ export type SpecimenState = 'received' | 'testing' | 'hold' | 'released' | 'disp
 export const ALL_SPECIMEN_STATE: readonly SpecimenState[] = ['received', 'testing', 'hold', 'released', 'disposed'];
 export type SignoffState = 'draft' | 'peer_review' | 'signed' | 'rejected';
 export const ALL_SIGNOFF_STATE: readonly SignoffState[] = ['draft', 'peer_review', 'signed', 'rejected'];
+export type DispositionState = 'pending' | 'confirmed' | 'voided';
+export const ALL_DISPOSITION_STATE: readonly DispositionState[] = ['pending', 'confirmed', 'voided'];
 
 export const ENTITY_CONFIGS: readonly EntityConfig[] = [
   { key: 'animalCase', path: 'cases', label: '动物样本来源', statuses: ['registered', 'sampling', 'testing', 'closed'] as const, primaryTransitions: { registered: 'sampling', sampling: 'testing', testing: 'closed' } },

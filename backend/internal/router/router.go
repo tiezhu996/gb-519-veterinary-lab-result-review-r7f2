@@ -32,14 +32,17 @@ func New(cfg config.Config, db *gorm.DB, redisClient *redis.Client, logger *slog
 	specimenRepository := repository.NewSpecimenRepository(db)
 	assayRunRepository := repository.NewAssayRunRepository(db)
 	resultSignoffRepository := repository.NewResultSignoffRepository(db)
+	criticalDispositionRepository := repository.NewCriticalDispositionRepository(db)
 	animalCaseService := service.NewAnimalCaseService(animalCaseRepository, securityService)
 	specimenService := service.NewSpecimenService(specimenRepository, securityService)
 	assayRunService := service.NewAssayRunService(assayRunRepository, securityService)
-	resultSignoffService := service.NewResultSignoffService(resultSignoffRepository, securityService)
+	resultSignoffService := service.NewResultSignoffService(resultSignoffRepository, criticalDispositionRepository, securityService)
+	criticalDispositionService := service.NewCriticalDispositionService(criticalDispositionRepository, assayRunRepository)
 	animalCaseHandler := handler.NewAnimalCaseHandler(animalCaseService)
 	specimenHandler := handler.NewSpecimenHandler(specimenService)
 	assayRunHandler := handler.NewAssayRunHandler(assayRunService)
 	resultSignoffHandler := handler.NewResultSignoffHandler(resultSignoffService)
+	criticalDispositionHandler := handler.NewCriticalDispositionHandler(criticalDispositionService)
 	systemHandler := handler.NewSystemHandler(securityService, animalCaseService, specimenService, assayRunService, resultSignoffService, db, redisClient)
 
 	engine.GET("/healthz", systemHandler.Health)
@@ -58,6 +61,7 @@ func New(cfg config.Config, db *gorm.DB, redisClient *redis.Client, logger *slog
 	specimenHandler.Register(api)
 	assayRunHandler.Register(api)
 	resultSignoffHandler.Register(api)
+	criticalDispositionHandler.Register(api)
 
 	engine.NoRoute(func(c *gin.Context) {
 		if c.Request.Method == http.MethodOptions {

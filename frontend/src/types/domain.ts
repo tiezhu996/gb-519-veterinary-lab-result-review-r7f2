@@ -19,6 +19,31 @@ export interface DomainRecord {
   reviewedBy?: string;
   reviewReason?: string;
   revisions?: SignoffRevision[];
+  operatedBy?: string;
+  dispositions?: CriticalDisposition[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CriticalDisposition {
+  id: number;
+  code: string;
+  status: 'pending' | 'confirmed' | 'voided';
+  version: number;
+  relatedCode: string;
+  assayRunId: number;
+  assayCode: string;
+  riskLevel: 'low' | 'medium' | 'high' | 'critical';
+  runOperator: string;
+  confirmedBy?: string;
+  receiveTarget?: string;
+  dispositionAction?: string;
+  confirmReason?: string;
+  confirmedAt?: string | null;
+  voidedBy?: string;
+  voidedReason?: string;
+  voidedAt?: string | null;
+  assayStatus?: string;
   createdAt: string;
   updatedAt: string;
 }
